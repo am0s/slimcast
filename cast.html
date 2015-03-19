@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+  <head>
+<style type="text/css">
+    @import url(http://fonts.googleapis.com/css?family=Droid+Serif:400,700);
+    body {
+        font-family: "Droid Serif", serif;
+        color: #444;
+        line-height: 150%;
+        border: 0;
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden !important;
+    }
+    video {
+        display: none;
+        margin: auto auto;
+        overflow: hidden !important;
+    }
+    .cover {
+        width: 30%
+    }
+</style>
+<script type="text/javascript"
+    src="//www.gstatic.com/cast/sdk/libs/receiver/2.0.0/cast_receiver.js">
+</script>
+    <title>SlimPlay</title>
+  </head>
+  <body>
+    <video id='vid'></video>
+    <div class="trackinfo">
+    <h1>SlimPlay</h1>
+    <h2 class="track" id="track">[track]</h2>
+    <h3 class="album" id="album">[album]</h3>
+    <h3 class="artist" id="artist">[artist]</h3>
+    <h3>
+        <span class="elapsed" id="elapsed">[elapsed]</span>
+        /
+        <span class="duration" id="duration">[duration]</span>
+    </h3>
+    <img class="cover" id="cover">
+    </div>
+<script type="text/javascript">
+    function nearlyEqual(a, b, epsilon) {
+        if (epsilon === undefined)
+            epsilon = 0.000001;
+        var absA = Math.abs(a);
+        var absB = Math.abs(b);
+        var diff = Math.abs(a - b);
+
+        if (a == b) { // shortcut, handles infinities
+            return true;
+        } else if (a == 0 || b == 0 || diff < 1.17549435E-38) {
+            // a or b is zero or both are extremely close to it
+            // relative error is less meaningful here
+            return diff < (epsilon * 1.17549435E-38);
+        } else { // use relative error
+            return diff / (absA + absB) < epsilon;
+        }
+    }
+
+    window.onload = function() {
+// Turn on debugging so that you can see what is going on.  Please turn this off
+// on your production receivers.  Especially if there may be any personally
+// identifiable information in the log.
+        //cast.receiver.logger.setLevelValue(cast.receiver.LoggerLevel.DEBUG);
+        console.log('Starting media application');
+        window.mediaElement = document.getElementById('vid');
+        window.coverElement = document.getElementById('cover');
+        window.trackElement = document.getElementById('track');
+        window.artistElement = document.getElementById('artist');
+        window.albumElement = document.getElementById('album');
+        window.durationElement = document.getElementById('duration');
+        window.elapsedElement = document.getElementById('elapsed');
+// Create the media manager. This will handle all media messages by default.
+        window.mediaManager = new cast.receiver.MediaManager(window.mediaElement);
+// Start the system
+        console.log('Application is ready, starting system');
+        var receiverManager = window.castReceiverManager = cast.receiver.CastReceiverManager.getInstance();
+        castReceiverManager.onSenderDisconnected = function (event) {
+            console.log("sender disconnected");
+        };
+
+        var decodeFinished = false;
+
+        window.squeezeBus = receiverManager.getCastMessageBus('urn:x-cast:squeezeplay', cast.receiver.CastMessageBus.MessageType.JSON);
+        window.squeezeBus.onMessage = function (e) {
+            if (e.data) {
+                var command = e.data.command;
+                if (command != 'status')
+                    console.log('squeeze message:', e);
+                if (command == 'load') {
+                    decodeFinished = false;
+                    window.mediaElement.src = e.data.url;
+                    window.duration = -1;
+                }
+                else if (command == 'status') {
+                    var mediaInfo = e.data.media;
+                    if (mediaInfo) {
+                        if (mediaInfo.coverUrl && window.coverElement.src != mediaInfo.coverUrl)
+                           window.coverElement.src = mediaInfo.coverUrl;
+                        if (mediaInfo.trackTitle)
+                            window.trackElement.textContent = mediaInfo.trackTitle;
+                        if (mediaInfo.trackArtistName)
+                            window.artistElement.textContent = mediaInfo.trackArtistName;
+                        if (mediaInfo.albumTitle)
+                            window.albumElement.textContent = mediaInfo.albumTitle;
+                        if (mediaInfo.duration)
+                            window.durationElement.textContent = mediaInfo.duration;
+                        if (mediaInfo.elapsed)
+                            window.elapsedElement.textContent = mediaInfo.elapsed;
+                    }
+                }
+                // Only for debugging purposes
+                else if (command == 'reload') {
+                    window.location.reload(true);
+                }
+                else if (command == 'play') {
+                    window.mediaElement.play();
+                }
+                else if (command == 'pause') {
+                    window.mediaElement.pause();
+                }
+                else if (command == 'volume') {
+                    if (e.data.value !== undefined) {
+                        var volume = Math.exp(e.data.value / 65536)/Math.E;
+                        window.mediaElement.volume = volume;
+                    }
+                }
+                else {
+                    console.log('unknown squeeze command:', e);
+                }
+            }
+            else {
+                console.log('unknown squeeze message:', e);
+            }
+        };
+
+        window.duration = -1;
+
+        function checkDecodeEnded(duration, buffered) {
+            if (duration !== Infinity && buffered.length >= 1) {
+                var bufferedEnd = buffered.end(0);
+                if (duration > bufferedEnd || nearlyEqual(duration,  bufferedEnd)) {
+                    console.log("stream data end");
+                    decodeFinished = true;
+                    return 'end';
+                }
+            }
+        }
+
+        window.mediaElement.addEventListener('playing', function (e) {
+            console.log("stream playing");
+            window.squeezeBus.broadcast({'type': 'status', playStatus: 'playing'});
+        });
+        window.mediaElement.addEventListener('pause', function (e) {
+            console.log("stream paused");
+            window.squeezeBus.broadcast({'type': 'status', playStatus: 'pause'});
+        });
+        window.mediaElement.addEventListener('durationchange', function (e) {
+            console.log("stream durationchange: " + window.mediaElement.duration);
+            var duration = window.mediaElement.duration;
+            var loadStatus = checkDecodeEnded(duration, window.mediaElement.buffered);
+            if (duration === Infinity)
+                duration = -1;
+            if (duration >= 0 || loadStatus)
+                window.squeezeBus.broadcast({'type': 'status', timeTotal: duration, loadStatus: loadStatus});
+            window.duration = window.mediaElement.duration;
+        });
+        function processElapsed(elapsed) {
+            if (elapsed < 0) {
+                console.log("ERR: Duration is negative", elapsed);
+                elapsed = undefined;
+            }
+            else if (elapsed > 4294967295) {
+                elapsed = undefined;
+            }
+            return elapsed;
+        }
+        window.mediaElement.addEventListener('ended', function (e) {
+            console.log("stream ended");
+            var duration = processElapsed(window.duration);
+            window.squeezeBus.broadcast({'type': 'status', playStatus: 'ended', timeElapsed: duration});
+        });
+        window.mediaElement.addEventListener('canplay', function (e) {
+            console.log("stream canplay", e);
+        });
+        window.mediaElement.addEventListener('canplaythrough', function (e) {
+            console.log("stream canplaytrough",e );
+        });
+        window.mediaElement.addEventListener('emptied', function (e) {
+            console.log("stream emptied", e);
+        });
+        window.mediaElement.addEventListener('error', function (e) {
+            console.log("stream error:", e);
+        });
+        window.mediaElement.addEventListener('loadeddata', function (e) {
+            console.log("stream loadeddata", e);
+            window.squeezeBus.broadcast({'type': 'status', loadStatus: 'data'});
+        });
+        window.mediaElement.addEventListener('loadedmetadata', function (e) {
+            console.log("stream loadedmetadata", e);
+            window.squeezeBus.broadcast({'type': 'status', loadStatus: 'meta'});
+        });
+        window.mediaElement.addEventListener('loadstart', function (e) {
+            console.log("stream loadstart", e);
+            window.squeezeBus.broadcast({'type': 'status', loadStatus: 'start'});
+        });
+        window.mediaElement.addEventListener('play', function (e) {
+            console.log("stream play", e);
+        });
+        window.mediaElement.addEventListener('stalled', function (e) {
+            console.log("stream stalled", e);
+        });
+        window.mediaElement.addEventListener('suspend', function (e) {
+            console.log("suspend");
+//            if (window.mediaElement.buffered.length >= 1)
+//                console.log("suspend", window.mediaElement.currentItem, window.mediaElement.buffered.end(0));
+//            else
+//                console.log("suspend", window.mediaElement.currentItem);
+//            var loadStatus = checkDecodeEnded(window.mediaElement.duration, window.mediaElement.buffered);
+//            if (loadStatus)
+//                window.squeezeBus.broadcast({'type': 'status', timeTotal: duration, loadStatus: loadStatus});
+        });
+        window.mediaElement.addEventListener('waiting', function (e) {
+            console.log("stream waiting", e);
+        });
+        window.mediaElement.addEventListener('progress', function (e) {
+            console.log("progress");
+//            if (window.mediaElement.buffered.length >= 1)
+//                console.log("progress", window.mediaElement.currentItem, window.mediaElement.buffered.end(0));
+//            else
+//                console.log("progress", window.mediaElement.currentItem);
+//            var loadStatus = checkDecodeEnded(window.mediaElement.duration, window.mediaElement.buffered);
+//            if (loadStatus)
+//                window.squeezeBus.broadcast({'type': 'status', timeTotal: duration, loadStatus: loadStatus});
+        });
+        setInterval(function () {
+            if (!window.mediaElement.paused) {
+                var duration = processElapsed(window.mediaElement.currentTime);
+                window.squeezeBus.broadcast({'type': 'status', timeElapsed: duration});
+            }
+        }, 100);
+
+//    window.squeezeBus.broadcast({'testing': 'something'});
+
+//    var host = new cast.player.api.Host({'mediaElement': window.mediaElement, 'url': window.mediaUrl});
+//    window.player = new cast.player.api.Player(host);
+//    window.player.load(protocol, 0);
+// The default inactivity is normally 10 seconds, since we are encouraging you
+// to debug this receiver, we are setting it to 10 minutes. As setting a break
+// point might inadvertently trigger a timeout. The purpose of the timer is to
+// speed the recognition of disconnection of a sender.  As the TCP/IP standard
+// mechanisms can be quite slow.
+        castReceiverManager.start({maxInactivity: 600});
+    };
+</script>
+  </body>
+</html>
+
