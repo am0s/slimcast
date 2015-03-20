@@ -173,11 +173,15 @@
             }
         };
 
-        function checkDecodeEnded(duration, buffered) {
+        function checkDecodeEnded(currentTime, duration, buffered) {
             if (duration !== Infinity && buffered.length >= 1) {
                 var bufferedEnd = buffered.end(0);
-                if (duration > bufferedEnd || nearlyEqual(duration,  bufferedEnd)) {
+                if (currentTime > duration || bufferedEnd > duration || nearlyEqual(duration,  bufferedEnd)) {
                     console.log("stream data end");
+                    console.log("currentTime", currentTime, "duration", duration, "bufferedEnd", bufferedEnd);
+                    for (var i = 0; i < buffered.length; ++i) {
+                        console.log("buffered[" + i + "]", buffered.start(0), buffered.end(0))
+                    }
                     decodeFinished = true;
                     decodeDoneElement.innerHTML = 'D';
                     return 'end';
@@ -195,7 +199,7 @@
                 //                    console.log("progress", mediaElement.currentTime);
                 if (window.mediaElement.paused || window.mediaElement.ended)
                     return;
-                var loadStatus = checkDecodeEnded(window.mediaElement.duration, window.mediaElement.buffered);
+                var loadStatus = checkDecodeEnded(window.mediaElement.currentTime, window.mediaElement.duration, window.mediaElement.buffered);
                 if (loadStatus) {
                     console.log("new load status", loadStatus);
                     window.squeezeBus.broadcast({'type': 'status', loadStatus: loadStatus});
