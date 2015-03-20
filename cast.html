@@ -19,7 +19,17 @@
         overflow: hidden !important;
     }
     .cover {
-        width: 30%
+        width: 400px;
+    }
+    .trackblock {
+        position: absolute;
+        left: 40px;
+        top: 40px;
+    }
+    .trackinfo {
+        position: fixed;
+        top: 20px;
+        left: 480px;
     }
 </style>
 <script type="text/javascript"
@@ -28,9 +38,11 @@
     <title>SlimPlay</title>
   </head>
   <body>
-    <video id='vid'></video>
+    <audio id='audio'></audio>
+    <div class="trackblock">
+    <img class="cover" id="cover">
     <div class="trackinfo">
-    <h1>SlimPlay</h1>
+    <h1>SlimPlay <span id="decodeDone">d</span> <span id="metaLoaded">m</span> <span id="nextStatus">r</span></h1>
     <h2 class="track" id="track">[track]</h2>
     <h3 class="album" id="album">[album]</h3>
     <h3 class="artist" id="artist">[artist]</h3>
@@ -39,7 +51,7 @@
         /
         <span class="duration" id="duration">[duration]</span>
     </h3>
-    <img class="cover" id="cover">
+    </div>
     </div>
 <script type="text/javascript">
     function nearlyEqual(a, b, epsilon) {
@@ -60,19 +72,33 @@
         }
     }
 
+    function processElapsed(elapsed) {
+        if (elapsed < 0) {
+            console.log("ERR: Elapsed is negative", elapsed);
+            elapsed = undefined;
+        }
+        else if (elapsed > 4294967295) {
+            elapsed = undefined;
+        }
+        return elapsed;
+    }
+
     window.onload = function() {
 // Turn on debugging so that you can see what is going on.  Please turn this off
 // on your production receivers.  Especially if there may be any personally
 // identifiable information in the log.
         //cast.receiver.logger.setLevelValue(cast.receiver.LoggerLevel.DEBUG);
         console.log('Starting media application');
-        window.mediaElement = document.getElementById('vid');
+        window.mediaElement = document.getElementById('audio');
         window.coverElement = document.getElementById('cover');
         window.trackElement = document.getElementById('track');
         window.artistElement = document.getElementById('artist');
         window.albumElement = document.getElementById('album');
         window.durationElement = document.getElementById('duration');
         window.elapsedElement = document.getElementById('elapsed');
+        window.decodeDoneElement = document.getElementById('decodeDone');
+        window.metaLoadedElement = document.getElementById('metaLoaded');
+        window.nextStatusElement = document.getElementById('nextStatus');
 // Create the media manager. This will handle all media messages by default.
         window.mediaManager = new cast.receiver.MediaManager(window.mediaElement);
 // Start the system
@@ -83,6 +109,7 @@
         };
 
         var decodeFinished = false;
+        var nextUrl;
 
         window.squeezeBus = receiverManager.getCastMessageBus('urn:x-cast:squeezeplay', cast.receiver.CastMessageBus.MessageType.JSON);
         window.squeezeBus.onMessage = function (e) {
@@ -91,9 +118,10 @@
                 if (command != 'status')
                     console.log('squeeze message:', e);
                 if (command == 'load') {
+                    console.log('load media element', window.mediaElement);
                     decodeFinished = false;
-                    window.mediaElement.src = e.data.url;
-                    window.duration = -1;
+                    nextUrl = e.data.url;
+                    nextStatusElement.innerHTML = 'R';
                 }
                 else if (command == 'status') {
                     var mediaInfo = e.data.media;
@@ -116,6 +144,14 @@
                 else if (command == 'reload') {
                     window.location.reload(true);
                 }
+                else if (command == 'next') {
+                    console.log('next url', nextUrl);
+                    startProgressTimer();
+                    window.mediaElement.src = nextUrl;
+                    nextUrl = null;
+                    window.mediaElement.play();
+                    nextStatusElement.innerHTML = 'r';
+                }
                 else if (command == 'play') {
                     window.mediaElement.play();
                 }
@@ -137,111 +173,135 @@
             }
         };
 
-        window.duration = -1;
-
         function checkDecodeEnded(duration, buffered) {
             if (duration !== Infinity && buffered.length >= 1) {
                 var bufferedEnd = buffered.end(0);
                 if (duration > bufferedEnd || nearlyEqual(duration,  bufferedEnd)) {
                     console.log("stream data end");
                     decodeFinished = true;
+                    decodeDoneElement.innerHTML = 'D';
                     return 'end';
                 }
             }
         }
 
-        window.mediaElement.addEventListener('playing', function (e) {
-            console.log("stream playing");
-            window.squeezeBus.broadcast({'type': 'status', playStatus: 'playing'});
-        });
-        window.mediaElement.addEventListener('pause', function (e) {
-            console.log("stream paused");
-            window.squeezeBus.broadcast({'type': 'status', playStatus: 'pause'});
-        });
-        window.mediaElement.addEventListener('durationchange', function (e) {
-            console.log("stream durationchange: " + window.mediaElement.duration);
-            var duration = window.mediaElement.duration;
-            var loadStatus = checkDecodeEnded(duration, window.mediaElement.buffered);
-            if (duration === Infinity)
-                duration = -1;
-            if (duration >= 0 || loadStatus)
-                window.squeezeBus.broadcast({'type': 'status', timeTotal: duration, loadStatus: loadStatus});
-            window.duration = window.mediaElement.duration;
-        });
-        function processElapsed(elapsed) {
-            if (elapsed < 0) {
-                console.log("ERR: Duration is negative", elapsed);
-                elapsed = undefined;
-            }
-            else if (elapsed > 4294967295) {
-                elapsed = undefined;
-            }
-            return elapsed;
+        function startProgressTimer() {
+            if (progressTimer)
+                clearInterval(progressTimer);
+            progressTimer = setInterval(function () {
+                //                if (mediaElement.buffered.length >= 1)
+                //                    console.log("progress", mediaElement.currentTime, mediaElement.buffered.end(0));
+                //                else if (mediaElement.currentTime)
+                //                    console.log("progress", mediaElement.currentTime);
+                if (window.mediaElement.paused || window.mediaElement.ended)
+                    return;
+                var loadStatus = checkDecodeEnded(window.mediaElement.duration, window.mediaElement.buffered);
+                if (loadStatus) {
+                    console.log("new load status", loadStatus);
+                    window.squeezeBus.broadcast({'type': 'status', loadStatus: loadStatus});
+                }
+                if (loadStatus == 'end') {
+                    clearInterval(progressTimer);
+                    progressTimer = null;
+                }
+            }, 250);
         }
-        window.mediaElement.addEventListener('ended', function (e) {
-            console.log("stream ended");
-            var duration = processElapsed(window.duration);
-            window.squeezeBus.broadcast({'type': 'status', playStatus: 'ended', timeElapsed: duration});
-        });
-        window.mediaElement.addEventListener('canplay', function (e) {
-            console.log("stream canplay", e);
-        });
-        window.mediaElement.addEventListener('canplaythrough', function (e) {
-            console.log("stream canplaytrough",e );
-        });
-        window.mediaElement.addEventListener('emptied', function (e) {
-            console.log("stream emptied", e);
-        });
-        window.mediaElement.addEventListener('error', function (e) {
-            console.log("stream error:", e);
-        });
-        window.mediaElement.addEventListener('loadeddata', function (e) {
-            console.log("stream loadeddata", e);
-            window.squeezeBus.broadcast({'type': 'status', loadStatus: 'data'});
-        });
-        window.mediaElement.addEventListener('loadedmetadata', function (e) {
-            console.log("stream loadedmetadata", e);
-            window.squeezeBus.broadcast({'type': 'status', loadStatus: 'meta'});
-        });
-        window.mediaElement.addEventListener('loadstart', function (e) {
-            console.log("stream loadstart", e);
-            window.squeezeBus.broadcast({'type': 'status', loadStatus: 'start'});
-        });
-        window.mediaElement.addEventListener('play', function (e) {
-            console.log("stream play", e);
-        });
-        window.mediaElement.addEventListener('stalled', function (e) {
-            console.log("stream stalled", e);
-        });
-        window.mediaElement.addEventListener('suspend', function (e) {
-            console.log("suspend");
-//            if (window.mediaElement.buffered.length >= 1)
-//                console.log("suspend", window.mediaElement.currentItem, window.mediaElement.buffered.end(0));
-//            else
-//                console.log("suspend", window.mediaElement.currentItem);
-//            var loadStatus = checkDecodeEnded(window.mediaElement.duration, window.mediaElement.buffered);
-//            if (loadStatus)
-//                window.squeezeBus.broadcast({'type': 'status', timeTotal: duration, loadStatus: loadStatus});
-        });
-        window.mediaElement.addEventListener('waiting', function (e) {
-            console.log("stream waiting", e);
-        });
-        window.mediaElement.addEventListener('progress', function (e) {
-            console.log("progress");
-//            if (window.mediaElement.buffered.length >= 1)
-//                console.log("progress", window.mediaElement.currentItem, window.mediaElement.buffered.end(0));
-//            else
-//                console.log("progress", window.mediaElement.currentItem);
-//            var loadStatus = checkDecodeEnded(window.mediaElement.duration, window.mediaElement.buffered);
-//            if (loadStatus)
-//                window.squeezeBus.broadcast({'type': 'status', timeTotal: duration, loadStatus: loadStatus});
-        });
+
+        var watchers = {};
+        var progressTimer;
+        function unwatchMediaElement(mediaElement) {
+            console.log("unwatching media element", mediaElement);
+            for (var name in watchers) {
+                if (!watchers.hasOwnProperty(name))
+                    continue;
+                console.log("unwatch", name);
+                mediaElement.removeEventListener(name, watchers[name]);
+                delete watchers[name];
+            }
+            if (progressTimer) {
+                clearInterval(progressTimer);
+                progressTimer = null;
+            }
+            console.log("unwatching done");
+        }
+
+        function watchMediaElement(mediaElement) {
+            console.log("watching media element", mediaElement);
+            watchers['playing'] = function (e) {
+                console.log("stream playing");
+                window.squeezeBus.broadcast({'type': 'status', playStatus: 'playing'});
+            };
+            watchers['pause'] = function (e) {
+                console.log("stream paused");
+                window.squeezeBus.broadcast({'type': 'status', playStatus: 'pause'});
+            };
+            watchers['durationchange'] = function (e) {
+                console.log("stream durationchange: " + mediaElement.duration);
+            };
+
+            watchers['ended'] = function (e) {
+                console.log("stream ended");
+                window.squeezeBus.broadcast({'type': 'status', playStatus: 'ended'});
+            };
+            watchers['canplay'] = function (e) {
+                console.log("stream canplay", e);
+            };
+            watchers['canplaythrough'] = function (e) {
+                console.log("stream canplaytrough", e);
+            };
+            watchers['emptied'] = function (e) {
+                console.log("stream emptied", e);
+            };
+            watchers['error'] = function (e) {
+                console.log("stream error:", e);
+            };
+            watchers['loadeddata'] = function (e) {
+                console.log("stream loadeddata", e);
+                window.squeezeBus.broadcast({'type': 'status', loadStatus: 'data'});
+            };
+            watchers['loadedmetadata'] = function (e) {
+                console.log("stream loadedmetadata", e);
+                metaLoadedElement.innerHTML = 'M';
+                window.squeezeBus.broadcast({'type': 'status', loadStatus: 'meta'});
+            };
+            watchers['loadstart'] = function (e) {
+                console.log("stream loadstart", e);
+                decodeDoneElement.innerHTML = 'd';
+                metaLoadedElement.innerHTML = 'm';
+                nextStatusElement.innerHTML = 'r';
+                window.squeezeBus.broadcast({'type': 'status', loadStatus: 'start'});
+            };
+            watchers['play'] = function (e) {
+                console.log("stream play", e);
+            };
+            watchers['stalled'] = function (e) {
+                console.log("stream stalled", e);
+            };
+            watchers['suspend'] = function (e) {
+//                console.log("suspend");
+            };
+            watchers['waiting'] = function (e) {
+                console.log("stream waiting", e);
+            };
+            watchers['progress'] = function (e) {
+//                console.log("progress");
+            };
+
+            for (var name in watchers) {
+                if (!watchers.hasOwnProperty(name))
+                    continue;
+                console.log("watching", name);
+                mediaElement.addEventListener(name, watchers[name]);
+            }
+            console.log("watching setup finished");
+        }
         setInterval(function () {
-            if (!window.mediaElement.paused) {
-                var duration = processElapsed(window.mediaElement.currentTime);
-                window.squeezeBus.broadcast({'type': 'status', timeElapsed: duration});
+            if (!(window.mediaElement.paused || window.mediaElement.ended)) {
+                var timeElapsed = processElapsed(window.mediaElement.currentTime);
+                window.squeezeBus.broadcast({'type': 'status', timeElapsed: timeElapsed});
             }
         }, 100);
+        watchMediaElement(window.mediaElement);
 
 //    window.squeezeBus.broadcast({'testing': 'something'});
 
