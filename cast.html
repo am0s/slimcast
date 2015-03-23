@@ -158,6 +158,9 @@
                 else if (command == 'pause') {
                     window.mediaElement.pause();
                 }
+                else if (command == 'stop') {
+                    window.mediaElement.stop();
+                }
                 else if (command == 'volume') {
                     if (e.data.value !== undefined) {
                         var volume = Math.exp(e.data.value / 65536)/Math.E;
